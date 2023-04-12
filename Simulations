@@ -1,0 +1,139 @@
+#rg_mode: Constant - Sampling from sample populations; Variable - Sampling from different populations; Need to specify the maximum rg and range in this case
+#h2_mode: Constant - Sampling from sample populations; Variable - Sampling from different populations; Need to specify the maximum h2 and range in this case
+#N_cohort: Number of cohort to be included in the simulation
+#max_sample_size: Number of individuals in the cohort with largest sample size
+#Sample_size_mode: Equal_Sample_Size - sample size of each cohort are approximately the same; Increasing_Sample_Size: Meta-analysis starting from small sample sizes; Decreasing_Sampe_Size: Meta-analysis starting from cohorts with largest sample size first 
+#rep_time: how many time we want to repeats for each simuations
+
+Simulating_sample_size <- function(Max_sample_size,Sample_size_mode,N_cohort){
+	if(Sample_size_mode == "Equal_Sample_Size"){sample_size_vector = sort(sample(round(0.5*Max_sample_size):round(Max_sample_size),100),decreasing=T)}
+    if(Sample_size_mode == "Variable_Sample_Size"){sample_size_vector = seq(Max_sample_size, Max_sample_size-(N_cohort-1)*round(Max_sample_size/N_cohort), -N_cohort)}
+	return(sample_size_vector)
+}
+
+Simulating_h2_list <- function(Mode,h2,N_cohort,sample_size_vector,range=NA){
+	h2_list = data.frame()
+	if(Mode=="Constant"){
+		for(i in 1:N_cohort){
+			temp_true_h2_df <- data.frame(paste0("Population_",i),h2,sample(runif(1000,max(0,h2-619/sample_size_vector[i]),min(1,h2+619/sample_size_vector[i])),size=1),sample_size_vector[i])
+			h2_list <- rbind(h2_list, temp_true_h2_df)
+		}	
+	}
+	if(Mode=="Variable"){
+		temp_true_h2_list <- runif(1000,max(0,h2-range/2),min(1,h2+range/2))
+		for(i in 1:N_cohort){
+			sampled_true_h2 <- sample(temp_true_h2_list,size=1)
+			temp_h2_df <- data.frame(paste0("Population_",i),sampled_true_h2,sample(runif(1000,max(0, sampled_true_h2-619/sample_size_vector[i]),min(1, sampled_true_h2+619/sample_size_vector[i])),size=1),sample_size_vector[i])
+			h2_list <- rbind(h2_list,temp_h2_df)
+		}			
+	}
+	colnames(h2_list) = c("Cohort_name","True_h2","Simulated_h2","Sample_size")
+	return(h2_list)
+}
+
+Simulating_rg_list <- function(Mode,rg,h2_list,range=NA){
+	rg_list = data.frame()
+    if(Mode=="Constant"){temp_true_h2_list <- rg}
+	if(Mode=="Variable"){temp_true_h2_list <- runif(10000,max(0,rg-range/2),min(1,rg+range/2))}
+	for(i in h2_list$Cohort_name){
+		for(j in h2_list$Cohort_name){
+			if(i > j){
+				cohort_A <- h2_list[which(h2_list$Cohort_name==i),]
+				cohort_B <- h2_list[which(h2_list$Cohort_name==j),]
+				h_A <- sqrt(cohort_A$True_h2[1])
+				N_A <- cohort_A$Sample_size[1]
+				h_B <- sqrt(cohort_B$True_h2[1])
+				N_B <- cohort_B$Sample_size[1]
+				true_rg <- sample(temp_true_h2_list,size=1)
+                SE_rg <- sqrt((true_rg^2*(N_A^2*h_A^4+N_B^2*h_B^4)+2*h_A^2*h_B^2*N_A*N_B)/(4*10^(-5)*N_A^2*h_A^4*N_B^2*h_B^4))
+				simulated_rg <- sample(runif(1000,max(0, true_rg-1.96*SE_rg),min(1,true_rg+1.96*SE_rg)),size=1)
+				temp_rg_df <- data.frame(i,j,true_rg,simulated_rg)
+			    rg_list <- rbind(rg_list,temp_rg_df)
+			}
+		}
+	}
+	colnames(rg_list) = c("Cohort_name_A","Cohort_name_B","True_rg","Simulated_rg")
+	return(rg_list)
+}
+
+Simulating_sets_of_h2_meta_value <- function(rg_list,h2_list){
+    m <- matrix(h2_list$Sample_size*sqrt(h2_list$Simulated_h2))
+    cohort_name <- h2_list$Cohort_name
+    rg.matrix = matrix(NA, ncol=length(cohort_name), nrow=length(cohort_name))
+    colnames(rg.matrix)=cohort_name
+    rownames(rg.matrix)=cohort_name
+    for (i in 1:length(rg_list$Cohort_name_A)){
+	rg.matrix[as.character(rg_list$Cohort_name_A[i]),as.character(rg_list$Cohort_name_B[i])] = rg_list$Simulated_rg[i]
+	rg.matrix[as.character(rg_list$Cohort_name_B[i]),as.character(rg_list$Cohort_name_A[i])] = rg_list$Simulated_rg[i]}
+	for (i in 1:length(cohort_name)){rg.matrix[as.character(h2_list$Cohort_name[i]),as.character(h2_list$Cohort_name[i])] = 1}
+	h2_meta_list=data.frame()
+	for(i in 1: length(cohort_name)){
+		h2_meta_temp <- data.frame(i,(t(m[1:i])%*%rg.matrix[1:i,1:i] %*% m[1:i])*(1/sum(h2_list$Sample_size[1:i])^2))
+		h2_meta_list <- rbind(h2_meta_list, h2_meta_temp)}
+	colnames(h2_meta_list) = c("N_cohorts_meta_analysed","h2_cohorts_meta_analysed")
+	return(h2_meta_list)
+	}
+
+Simulating_h2_meta <- function(rg_mode,rg,rg_range,h2_mode,h2,h2_range,N_cohort,max_sample_size,sample_size_mode,rep_time){
+	sample_size_vector <- Simulating_sample_size(max_sample_size,sample_size_mode,N_cohort)
+	simulated_h2_meta_list <- data.frame()
+	for(i in 1:rep_time){
+		    h2_list <- Simulating_h2_list(h2_mode,h2,N_cohort,sample_size_vector,h2_range)
+	        rg_list <- Simulating_rg_list(rg_mode,rg,h2_list,rg_range)
+            simulated_h2_meta_list_temp <- data.frame(i,Simulating_sets_of_h2_meta_value(rg_list,h2_list))
+		    simulated_h2_meta_list <- rbind(simulated_h2_meta_list,simulated_h2_meta_list_temp)
+	}
+	colnames(simulated_h2_meta_list) <- c("Run_ID","N_cohorts_meta_analysed","h2_cohorts_meta_analysed")
+	return(simulated_h2_meta_list)
+}
+
+args <- commandArgs(trailingOnly = TRUE)
+rg_mode <- strsplit(args," ")[[1]][1]
+h2_mode <- strsplit(args," ")[[2]][1]
+Sample_size_mode <- strsplit(args," ")[[3]][1]
+
+rg <- seq(2,9,3)/10
+h2 <- seq(2,9,3)/10
+df=data.frame()
+for(i in rg){
+	for(j in h2){
+		simu_results_temp <- Simulating_h2_meta(rg_mode,i,0.2,h2_mode,j,0.2,100,100000,Sample_size_mode,100)	
+		v <- data.frame(simu_results_temp,paste0("rg_",i,"_h2_",j))
+	    df <- rbind(v,df)	
+}}
+colnames(df)[4]<-c("Cohort")
+write.table(df,paste0(rg_mode,"_rg_",h2_mode,"_h2_",Sample_size_mode,"_100000_simu_results"), col.names=T,row.names=F,quote=F,sep = "\t")
+
+
+df=data.frame()
+for(i in rg){
+	for(j in h2){
+		simu_results_temp <- Simulating_h2_meta(rg_mode,i,0.2,h2_mode,j,0.2,100,10000,Sample_size_mode,100)	
+		v <- data.frame(simu_results_temp,paste0("rg_",i,"_h2_",j))
+	    df <- rbind(v,df)	
+}}
+colnames(df)[4]<-c("Cohort")
+write.table(df,paste0(rg_mode,"_rg_",h2_mode,"_h2_",Sample_size_mode,"_10000_simu_results"), col.names=T,row.names=F,quote=F,sep = "\t")
+
+-------------------------------------------------Plot the results------------------------------------------------------------------------------------
+library(ggplot2)
+args <- commandArgs(trailingOnly = TRUE)
+rg_mode <- strsplit(args," ")[[1]][1]
+h2_mode <- strsplit(args," ")[[2]][1]
+Sample_size_mode <- strsplit(args," ")[[3]][1]
+
+df <- read.table(paste0(rg_mode,"_rg_",h2_mode,"_h2_",Sample_size_mode,"_100000_simu_results"), header=T)
+p<-ggplot(df, aes(x=N_cohorts_meta_analysed, y=h2_cohorts_meta_analysed, group=Cohort)) + geom_point(aes(color=Cohort),alpha=0.15)
+p
+ggsave(paste0(rg_mode,"_rg_",h2_mode,"_h2_",Sample_size_mode,"_100000_simu_results.png"))
+dev.off()
+
+df <- read.table(paste0(rg_mode,"_rg_",h2_mode,"_h2_",Sample_size_mode,"_10000_simu_results"), header=T)
+p<-ggplot(df, aes(x=N_cohorts_meta_analysed, y=h2_cohorts_meta_analysed, group=Cohort)) + geom_point(aes(color=Cohort),alpha=0.15)
+p
+ggsave(paste0(rg_mode,"_rg_",h2_mode,"_h2_",Sample_size_mode,"_10000_simu_results.png"))
+dev.off()
+
+
+#Simulating_h2_meta("Variable",0.8,0.2,"Variable",0.8,0.2,100,100000,"Variable",100)	
+
