@@ -1,0 +1,89 @@
+/*
+ * Codes below are used to show that under the condition outlined by Equation 6, out-of-sample prediction R2 can be higher than 
+ * SNP-based heritability in the meta-analysis cohort used to generate genetic predictors (as shown in Figure 4 and Figure S5)
+ * 
+ * This code only works when GWAS summary statistics of each individual cohort are available.  
+ *
+ */
+
+
+library(viridis)
+library(ggplot2)
+#Input h2 estimates in leave-one-out meta-analysis
+#Colnames for h2_LOO are "Cohort h2_obs se_h2_obs"; Heritability estimates and se of h2 estimates are in observed scale here 
+h2_LOO <- read.table("h2_LOO.txt",header=T)
+#Calculate the heritability in the liability scale
+K <- 0.15 #Please plug in the prevalence of the disease here. 0.15 is the prevalence for MDD 
+t<--qnorm(K,0,1)
+z<-dnorm(t)
+h2_Proportion=0.5 #Please convert all sample sizes to effect sample sizes. Proportion of case and control will thus be 0.5.
+h2_LOO$h2_lia <- h2_LOO$h2_obs*K*(1-K)*K*(1-K)/(h2_Proportion*(1-h2_Proportion)*z*z)
+h2_LOO$se_h2_lia=(K*(1-K)*K*(1-K)/(z*z*h2_Proportion*(1-h2_Proportion)))* h2_LOO$se_h2_obs
+
+#Input h2 estimates in each individual GWAS cohort
+h2_single <- read.table("h2_per_cohort.txt",header=T)
+#Colnames for h2_per_cohort.txt are "Cohort h2_obs se_h2_obs"; Heritability estimates and se of h2 estimates are in observed scale here 
+K <- 0.15 #Please plug in the prevalence of the disease here. 0.15 is the prevalence for MDD 
+t<--qnorm(K,0,1)
+z<-dnorm(t)
+h2_Proportion=0.5 #Please convert all sample sizes to effect sample sizes. Proportion of case and control will thus be 0.5.
+h2_single$h2_lia <- h2_single$h2_obs*K*(1-K)*K*(1-K)/(h2_Proportion*(1-h2_Proportion)*z*z)
+h2_single$se_h2_lia=(K*(1-K)*K*(1-K)/(z*z*h2_Proportion*(1-h2_Proportion)))* h2_single$se_obs
+
+#Input genetic correlations between the left-out target cohort and meta-analyis cohorts
+#Colnames for rg_LOO_target.txt are "Cohort rg_obs se_rg_obs"; Cohort here are the name for the left-out cohort; rg in observed scale 
+#equals to rg in liability scale 
+rg_single_LOO <- read.table("rg_LOO_target.txt",header=T)
+rg_single_LOO <- rg_single_LOO[which(!(is.na(rg_single_LOO$rg_obs))),]
+
+#Input sample size of each cohort
+#Colnames for N_PGC_MDD_Wave2.txt are "Cohort N_Case N_Control N_eff"; N_eff is the effective sample size
+N_target_cohort <- read.table("N_PGC_MDD_Wave2.txt",header=T)
+
+#Input results of out-of-sample prediction R2
+r2_results <- read.table("maf01_sbayesr_ldmlisa.txt",header=T)
+
+#The code below is specific to our out-of-sample prediction R2 results. Essential columns in R2 results are
+#Cohort(need to match cohort names inputted above); R2 on the libility scale; se of R2 on the liability scale 
+r2_results$Cohort <- sapply(strsplit(r2_results$name,"_"),`[`)[4,]
+
+#Retain only overlapping cohort
+h2_single <- h2_single[which(h2_single$Cohort %in% rg_single_LOO$Cohort),]
+
+plot_df <- data.frame(h2_single[1],h2_single[4:5])
+plot_df[4:5] <-h2_LOO[match(plot_df$Cohort, h2_LOO$Cohort),4:5]
+plot_df[6:7] <-rg_single_LOO[match(plot_df$Cohort, rg_single_LOO$Cohort),2:3]
+plot_df[8] <- 665000 #Insert the total sample size for the LOO meta-analysis cohort
+#(as the sample size of the left-out cohort are much smaller than the LOO meta-analysis cohort,we used the same sample size here.Cautious need
+#to be made when that is not true)
+plot_df[9:10] <- r2_results[match(plot_df$Cohort, r2_results$Cohort),7:8] #Column 7 and 8 are R2 on the libility scale and se of R2 on the liability scale in
+#our data set. Please check the number of columns in your dataset
+colnames(plot_df) <- c("Cohort","h2_liab_single","se_h2_liab_single","h2_liab_LOO","se_h2_liab_LOO","rg_single_LOO","se_rg_single_LOO","N_LOO","r2_liab","se_r2_liab")
+plot_df$r2_liab <- as.numeric(plot_df$r2_liab)
+plot_df$se_r2_liab <- as.numeric(plot_df$se_r2_liab)
+plot_df$N_target_eff <- N_target_cohort[match(plot_df$Cohort, N_target_cohort$Cohort),4]
+
+#Only retain cohort whose h2 estimates lie between 0 and 1 as in Figure 4
+plot_df_valid2 <- plot_df[which((plot_df$h2_liab_single >=0)&(plot_df$h2_liab_single <= 1)),]
+plot_df_valid2$h2rg2 <- plot_df_valid2$h2_liab_single*plot_df_valid2$rg_single_LOO^2
+plot_df_valid2 <- plot_df_valid2[(!is.na(plot_df_valid2$rg_single_LOO)),]
+
+#0.075 and 0.0025 here are the h2 estimates and se of h2 estimates in the meta-analysis cohort. Please substitute it with h2 and se in your own dataset
+#As mentioned above, cautious need to be made when the sample size of the left-out cohort are NOT much smaller than the LOO meta-analysis cohort. If that is the
+#case, the plot need to be re-designed.
+
+p <- ggplot(plot_df_valid2, aes(x=h2rg2, y=r2_liab, colour=Cohort))+geom_point(aes(size=N_target_eff))+geom_hline(yintercept=0.075, linetype="dashed", color = "red")+geom_hline(yintercept=0.075+1.96*0.0025, linetype="dashed", color = "dodgerblue")+geom_hline(yintercept=0.075-1.96*0.0025, linetype="dashed", color = "dodgerblue")+geom_vline(xintercept=60000/665000 + 0.075, linetype="dashed", color = "black")+scale_color_viridis(discrete = TRUE, option = "D")+scale_fill_viridis(discrete = TRUE)
+ggsave("MDD_R2_h2_compare_h2_between_0_and_1.png") 
+
+#Include all cohorts whose h2 estimates are not NA, as in Figure S5
+plot_df_valid3 <- plot_df[!is.na(plot_df$h2_liab_single),]
+plot_df_valid3$h2rg2 <- plot_df_valid3$h2_liab_single*plot_df_valid3$rg_single_LOO^2
+plot_df_valid3 <- plot_df_valid3[(!is.na(plot_df_valid3$rg_single_LOO)),]
+
+ggplot(plot_df_valid3, aes(x=h2rg2, y=r2_liab, colour=Cohort))+geom_point(aes(size=N_target_eff))+
+    geom_hline(yintercept=0.075, linetype="dashed", color = "red")+
+    geom_hline(yintercept=0.075+1.96*0.0025, linetype="dashed", color = "dodgerblue")+
+    geom_hline(yintercept=0.075-1.96*0.0025, linetype="dashed", color = "dodgerblue")+
+    geom_vline(xintercept=60000/665000 + 0.075, linetype="dashed", color = "black")+
+    scale_color_viridis(discrete = TRUE, option = "D")+scale_fill_viridis(discrete = TRUE)
+ggsave("MDD_R2_h2_compare_all_cohorts.png")    
